@@ -11,18 +11,22 @@ class VisualOdometry():
                 table_number = 6,
                 key_size = 12,
                 multi_probe_level = 1,
-                good_filter = 0.5,
-                k = 2,
+                ratio_test_threshold = 0.75,  
+                knn_match_num = 2,            
+                max_features = 3000,         
                 bundle_adjustment_steps = [2, 10],
                 bundle_adjustment_epochs = 500,
                 bundle_adjustment_learning_rate = 1e-3,
                 bundle_adjustment_loss_tolerance = 1,
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-                image_sharpen_kernal = np.array([
+                image_sharpen_kernel = np.array([ 
                 [0, -1, 0], 
                 [-1, 5, -1], 
                 [0, -1, 0]]),
-                sharpening = False
+                sharpening = False,
+                findEssentialMat_method=cv2.RANSAC,
+                findEssentialMat_prob=0.999,
+                findEssentialMat_threshold=1.0
                 ):
 
         self.bundle_adjustment_learning_rate = bundle_adjustment_learning_rate
@@ -44,21 +48,25 @@ class VisualOdometry():
 
         self.K, self.P = self._load_calib(camera_calib_file)
 
-        self.orb = cv2.ORB_create(3000)
+        self.orb = cv2.ORB_create(nfeatures=max_features)
         index_params = dict(algorithm=FLANN_INDEX_LSH, table_number=table_number, key_size=key_size, multi_probe_level=multi_probe_level)
         search_params = dict(checks=50)
         self.flann = cv2.FlannBasedMatcher(indexParams=index_params, searchParams=search_params)
 
-        self.good_filter = good_filter
-        self.k = k
+        self.ratio_test_threshold = ratio_test_threshold
+        self.knn_match_num = knn_match_num
 
         self.prev_img = None
         self.prev_keypoints = None
         self.prev_descriptors = None
 
         self.display_frame = None
-        self.image_sharpen_kernal = image_sharpen_kernal
+        self.image_sharpen_kernel = image_sharpen_kernel
         self.sharpening = sharpening
+
+        self.findEssentialMat_method = findEssentialMat_method
+        self.findEssentialMat_prob = findEssentialMat_prob
+        self.findEssentialMat_threshold = findEssentialMat_threshold
 
     #! Helper Functions -----------------------------------------------------
     def _load_calib(self, filepath):
@@ -84,7 +92,7 @@ class VisualOdometry():
             
             # Apply sharpening filter if enabled
             if self.sharpening:
-                img_gray = cv2.filter2D(img_gray, -1, self.image_sharpen_kernal)  # Shape: (H, W)
+                img_gray = cv2.filter2D(img_gray, -1, self.image_sharpen_kernel)  # Shape: (H, W)
             
             # Detect ORB keypoints and compute descriptors
             keypoints, descriptors = self.orb.detectAndCompute(img_gray, None)  # keypoints: list of cv2.KeyPoint, descriptors: (N, 32)
@@ -97,15 +105,15 @@ class VisualOdometry():
                 return None, None
             
             # If there are not enough descriptors, return
-            if len(descriptors) < self.k or len(self.prev_descriptors) < self.k:
+            if len(descriptors) < self.knn_match_num or len(self.prev_descriptors) < self.knn_match_num:
                 print("Not enough descriptors")
                 return None, None
             
             # Find matches between previous and current descriptors using FLANN-based matcher
-            matches = self.flann.knnMatch(self.prev_descriptors, descriptors, k=self.k)  # matches: list of DMatch
+            matches = self.flann.knnMatch(self.prev_descriptors, descriptors, k=self.knn_match_num)  # matches: list of DMatch
             
             # Filter good matches based on distance ratio test
-            good = [m for m, n in matches if m.distance < self.good_filter * n.distance]  # good: list of DMatch
+            good = [m for m, n in matches if m.distance < self.ratio_test_threshold * n.distance]  # good: list of DMatch
             
             # If there are not enough good matches, return
             if len(good) < 8:
@@ -132,11 +140,20 @@ class VisualOdometry():
             return None, None
 
     def update_pose(self, q1, q2):
-        # Compute the Essential Matrix using the matched points
-        Essential, mask = cv2.findEssentialMat(q1, q2, self.K)  # Essential: (3, 3), mask: (M, 1)
-
-        # Decompose the Essential Matrix to obtain R, t, and 3D points
-        R, t, hom_Q, valid_indices = self.decomp_essential_mat(Essential, q1, q2)  # R: (3, 3), t: (3,), hom_Q: (4, N), valid_indices: (N,)
+        # Use RANSAC in findEssentialMat to compute the Essential Matrix and obtain a mask of inliers
+        Essential, mask = cv2.findEssentialMat(
+            q1, q2, self.K, 
+            method=self.findEssentialMat_method, 
+            prob=self.findEssentialMat_prob, 
+            threshold=self.findEssentialMat_threshold
+        )
+        
+        # Filter the matched points using the inlier mask to improve accuracy
+        q1_inliers = q1[mask.ravel() == 1]
+        q2_inliers = q2[mask.ravel() == 1]
+        
+        # Decompose the Essential Matrix using only the inlier points
+        R, t, hom_Q, valid_mask = self.decomp_essential_mat(Essential, q1_inliers, q2_inliers)
 
         if R is None or t is None or hom_Q is None:
             print("Failed to decompose Essential Matrix")
@@ -165,12 +182,12 @@ class VisualOdometry():
         Q = hom_Q_world[:3, :] / hom_Q_world[3, :]  # Shape: (3, N)
 
         # Filter out points with negative depth
-        Q = Q[:, valid_indices]  # Shape: (3, M)
-        q2 = q2[valid_indices]  # Shape: (M, 2)
+        Q = Q[:, valid_mask]  # Shape: (3, M)
+        q2_inliers = q2_inliers[valid_mask]  # Shape: (M, 2)
 
         # Append the 3D points and observations for bundle adjustment
         self.points_3d.append(Q.T)  # Shape: (M, 3)
-        self.observations.append(q2)  # Shape: (M, 2)
+        self.observations.append(q2_inliers)  # Shape: (M, 2)
 
         # Start the bundle adjustment threads if not already running
         for step in self.bundle_adjustment_steps:

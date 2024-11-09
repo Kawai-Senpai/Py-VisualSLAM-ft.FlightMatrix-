@@ -1,4 +1,3 @@
-
 import cv2
 import numpy as np
 
@@ -52,5 +51,27 @@ def draw_trajectory(trajectory, rotation, all_points, all_pixels, frame, img_siz
 
     # Flip the image vertically so the origin is at the bottom left
     traj_img = cv2.flip(traj_img, 0)
+
+    # Prepare text for translation and rotation
+    translation_text = f"Translation: {np.round(trajectory[-1], 2)}"
+    rotation_vector, _ = cv2.Rodrigues(rotation)
+    rotation_text = f"Rotation: {np.round(rotation_vector.flatten(), 2)}"
+
+    # Set font parameters for a neat appearance
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    color = (255, 255, 255)
+    thickness = 1
+
+    # Get image dimensions
+    height, width = traj_img.shape[:2]
+
+    # Positions for the text in the bottom-left corner
+    text_position_translation = (10, height - 30)
+    text_position_rotation = (10, height - 10)
+
+    # Add text to the image
+    cv2.putText(traj_img, translation_text, text_position_translation, font, font_scale, color, thickness, cv2.LINE_AA)
+    cv2.putText(traj_img, rotation_text, text_position_rotation, font, font_scale, color, thickness, cv2.LINE_AA)
 
     return traj_img

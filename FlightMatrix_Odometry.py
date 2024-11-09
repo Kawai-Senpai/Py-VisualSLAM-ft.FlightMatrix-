@@ -44,7 +44,7 @@ while True:
         rotation = estimated_poses[-1][:3, :3]
 
         # Draw the trajectory image
-        traj_img = draw_trajectory(path, rotation, points, pixels, frame, img_size=resolution, draw_scale=2)
+        traj_img = draw_trajectory(path, rotation, points, pixels, frame, img_size=(800,800), draw_scale=1)
         cv2.imshow("Trajectory", traj_img)
 
     # Display matches image
