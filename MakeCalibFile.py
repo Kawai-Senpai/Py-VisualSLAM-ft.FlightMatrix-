@@ -2,6 +2,22 @@ import numpy as np
 import math
 
 def get_float_input(prompt, default=None):
+    """
+    Prompt the user to enter a floating-point number.
+
+    This function repeatedly prompts the user for input until a valid floating-point number is entered.
+    If the user provides an empty input and a default value is specified, the default value is returned.
+
+    Args:
+        prompt (str): The message displayed to the user when asking for input.
+        default (float, optional): The default value to return if the user provides an empty input. Defaults to None.
+
+    Returns:
+        float: The floating-point number entered by the user, or the default value if specified and the input is empty.
+
+    Raises:
+        ValueError: If the user input cannot be converted to a float and no default value is provided.
+    """
     while True:
         try:
             user_input = input(prompt)
@@ -12,6 +28,19 @@ def get_float_input(prompt, default=None):
             print("Invalid input. Please enter a numeric value.")
 
 def rotation_matrix_from_angles(pitch, yaw, roll):
+    """
+    Calculate a combined rotation matrix from pitch, yaw, and roll angles.
+    This function converts the given pitch, yaw, and roll angles from degrees 
+    to radians and then computes the corresponding rotation matrices for each 
+    axis. The final rotation matrix is obtained by multiplying the individual 
+    rotation matrices in the order of roll, yaw, and pitch.
+    Parameters:
+    pitch (float): The rotation angle around the x-axis in degrees.
+    yaw (float): The rotation angle around the y-axis in degrees.
+    roll (float): The rotation angle around the z-axis in degrees.
+    Returns:
+    numpy.ndarray: A 3x3 combined rotation matrix.
+    """
     # Convert angles from degrees to radians
     pitch = math.radians(pitch)
     yaw = math.radians(yaw)
@@ -41,6 +70,21 @@ def rotation_matrix_from_angles(pitch, yaw, roll):
     return R
 
 def main():
+    """
+    Main function to generate a camera calibration file.
+    This function performs the following steps:
+    1. Prompts the user to enter camera parameters including image width, image height, and field of view (FOV).
+    2. Asks the user if they have sensor dimensions. If not, it calculates the sensor dimensions based on a standard full-frame sensor width.
+    3. Converts the FOV to focal length in millimeters.
+    4. Computes the focal lengths in pixels and the principal point.
+    5. Creates the intrinsic matrix K.
+    6. Creates the first projection matrix P1 assuming no initial rotation or translation.
+    7. Prompts the user to enter rotation angles (pitch, yaw, roll) and translation values (tx, ty, tz) for the second projection matrix.
+    8. Computes the rotation matrix and creates the translation vector.
+    9. Creates the second projection matrix P2.
+    10. Writes the flattened projection matrices to a file named "Data/FlightMatrixCalib.txt".
+    The function uses helper functions `get_float_input` to get float inputs from the user and `rotation_matrix_from_angles` to compute the rotation matrix from given angles.
+    """
     print("Camera Calibration File Generator")
 
     # Get camera parameters from the user

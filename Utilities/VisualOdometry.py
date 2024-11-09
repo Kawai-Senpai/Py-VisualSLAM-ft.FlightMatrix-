@@ -77,6 +77,56 @@ class VisualOdometry():
                 findEssentialMat_threshold=1.0
                 ):
 
+        """
+            Initializes the VisualOdometry class with the given parameters.
+            Args:
+                init_pose (np.ndarray, optional): Initial pose of the camera as a 4x4 transformation matrix. Defaults to None.
+                camera_calib_file (str, optional): Path to the camera calibration file. Defaults to 'calib.txt'.
+                FLANN_INDEX_LSH (int, optional): Algorithm index for FLANN-based matcher. Defaults to 6.
+                table_number (int, optional): Table number for FLANN-based matcher. Defaults to 6.
+                key_size (int, optional): Key size for FLANN-based matcher. Defaults to 12.
+                multi_probe_level (int, optional): Multi-probe level for FLANN-based matcher. Defaults to 1.
+                ratio_test_threshold (float, optional): Threshold for ratio test in feature matching. Defaults to 0.75.
+                knn_match_num (int, optional): Number of nearest neighbors to find in KNN matching. Defaults to 2.
+                max_features (int, optional): Maximum number of features to detect. Defaults to 3000.
+                bundle_adjustment_steps (list, optional): Steps for bundle adjustment. Defaults to [2, 10].
+                bundle_adjustment_epochs (int, optional): Number of epochs for bundle adjustment. Defaults to 500.
+                bundle_adjustment_learning_rate (float, optional): Learning rate for bundle adjustment. Defaults to 1e-3.
+                bundle_adjustment_loss_tolerance (float, optional): Loss tolerance for bundle adjustment. Defaults to 1.
+                device (torch.device, optional): Device to run computations on (CPU or GPU). Defaults to GPU if available, otherwise CPU.
+                image_sharpen_kernel (np.ndarray, optional): Kernel for image sharpening. Defaults to a 3x3 sharpening kernel.
+                sharpening (bool, optional): Flag to enable or disable image sharpening. Defaults to False.
+                findEssentialMat_method (int, optional): Method for finding the essential matrix. Defaults to cv2.RANSAC.
+                findEssentialMat_prob (float, optional): Probability for RANSAC in finding the essential matrix. Defaults to 0.999.
+                findEssentialMat_threshold (float, optional): Threshold for RANSAC in finding the essential matrix. Defaults to 1.0.
+            Attributes:
+                bundle_adjustment_learning_rate (float): Learning rate for bundle adjustment.
+                device (torch.device): Device to run computations on (CPU or GPU).
+                bundle_adjustment_steps (list): Steps for bundle adjustment.
+                bundle_adjustment_epochs (int): Number of epochs for bundle adjustment.
+                bundle_adjustment_loss_tolerance (float): Loss tolerance for bundle adjustment.
+                bundle_adjustment_threads (dict): Dictionary to store threads for bundle adjustment.
+                lock (threading.Lock): Lock for thread synchronization.
+                estimated_poses (list): List of estimated poses.
+                points_3d (list): List of 3D points.
+                observations (list): List of observations.
+                K (np.ndarray): Camera intrinsic matrix.
+                P (np.ndarray): Camera projection matrix.
+                orb (cv2.ORB): ORB feature detector.
+                flann (cv2.FlannBasedMatcher): FLANN-based feature matcher.
+                ratio_test_threshold (float): Threshold for ratio test in feature matching.
+                knn_match_num (int): Number of nearest neighbors to find in KNN matching.
+                prev_img (np.ndarray): Previous image frame.
+                prev_keypoints (list): Keypoints from the previous image frame.
+                prev_descriptors (np.ndarray): Descriptors from the previous image frame.
+                display_frame (np.ndarray): Frame to display.
+                image_sharpen_kernel (np.ndarray): Kernel for image sharpening.
+                sharpening (bool): Flag to enable or disable image sharpening.
+                findEssentialMat_method (int): Method for finding the essential matrix.
+                findEssentialMat_prob (float): Probability for RANSAC in finding the essential matrix.
+                findEssentialMat_threshold (float): Threshold for RANSAC in finding the essential matrix.
+            """
+
         self.bundle_adjustment_learning_rate = bundle_adjustment_learning_rate
         self.device = device
         self.bundle_adjustment_steps = bundle_adjustment_steps
@@ -118,6 +168,15 @@ class VisualOdometry():
 
     #! Helper Functions -----------------------------------------------------
     def _load_calib(self, filepath):
+        """
+        Loads calibration parameters from a file.
+        Args:
+            filepath (str): The path to the calibration file.
+        Returns:
+            tuple: A tuple containing:
+                - K (numpy.ndarray): The intrinsic camera matrix (3x3).
+                - P (numpy.ndarray): The projection matrix (3x4).
+        """
 
         with open(filepath, 'r') as f:
             params = np.fromstring(f.readline(), dtype=np.float64, sep=' ')
@@ -126,6 +185,14 @@ class VisualOdometry():
         return K, P
 
     def _form_transf(self, R, t):
+        """
+        Forms a 4x4 transformation matrix from a rotation matrix and a translation vector.
+        Parameters:
+        R (numpy.ndarray): A 3x3 rotation matrix.
+        t (numpy.ndarray): A 3x1 translation vector.
+        Returns:
+        numpy.ndarray: A 4x4 transformation matrix combining the rotation and translation.
+        """
 
         T = np.eye(4, dtype=np.float64)
         T[:3, :3] = R
@@ -134,6 +201,18 @@ class VisualOdometry():
 
     #! Main ORB Functions ---------------------------------------------------
     def get_matches(self, img):
+        """
+        Detects and matches keypoints between the current and previous frames using ORB and FLANN-based matcher.
+        Args:
+            img (numpy.ndarray): The input image in BGR format.
+        Returns:
+            tuple: A tuple containing:
+                - q1 (numpy.ndarray or None): Coordinates of matched keypoints in the previous frame. Shape: (M, 2).
+                - q2 (numpy.ndarray or None): Coordinates of matched keypoints in the current frame. Shape: (M, 2).
+                If there are not enough descriptors or good matches, returns (None, None).
+        Raises:
+            Exception: If an error occurs during processing.
+        """
         try:
             # Convert the input image to grayscale
             img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # Shape: (H, W)
@@ -188,6 +267,28 @@ class VisualOdometry():
             return None, None
 
     def update_pose(self, q1, q2):
+        """
+        Updates the pose of the camera using matched feature points from two consecutive frames.
+        Args:
+            q1 (np.ndarray): Matched feature points from the first frame. Shape: (N, 2).
+            q2 (np.ndarray): Matched feature points from the second frame. Shape: (N, 2).
+        Returns:
+            None
+        This function performs the following steps:
+        1. Computes the Essential Matrix using RANSAC to filter out outliers.
+        2. Filters the matched points using the inlier mask to improve accuracy.
+        3. Decomposes the Essential Matrix to obtain the rotation (R) and translation (t) matrices.
+        4. Forms the transformation matrix from R and t.
+        5. Updates the pose with respect to the world frame.
+        6. Converts the homogeneous 3D points to world coordinates.
+        7. Filters out points with negative depth.
+        8. Appends the 3D points and observations for bundle adjustment.
+        9. Starts the bundle adjustment threads if not already running.
+        Note:
+            - The function prints the estimated pose in the world frame.
+            - The function handles the first pose differently by inverting the transformation matrix.
+            - The function ensures that bundle adjustment threads are running for specified steps.
+        """
         # Use RANSAC in findEssentialMat to compute the Essential Matrix and obtain a mask of inliers
         Essential, mask = cv2.findEssentialMat(
             q1, q2, self.K, 
@@ -245,6 +346,20 @@ class VisualOdometry():
                 self.bundle_adjustment_threads[step] = thread
 
     def decomp_essential_mat(self, E, q1, q2):
+        """
+        Decompose the Essential Matrix into possible rotations and translation, and select the best transformation
+        based on the number of points with positive depth.
+        Parameters:
+        E (numpy.ndarray): The Essential Matrix of shape (3, 3).
+        q1 (numpy.ndarray): The matched points in the first image of shape (N, 2).
+        q2 (numpy.ndarray): The matched points in the second image of shape (N, 2).
+        Returns:
+        tuple: A tuple containing:
+            - R (numpy.ndarray): The rotation matrix of shape (3, 3).
+            - t (numpy.ndarray): The translation vector of shape (3,).
+            - hom_Q (numpy.ndarray): The homogeneous coordinates of the 3D points in the current frame of shape (4, N).
+            - valid_indices (numpy.ndarray): A boolean array indicating valid points with positive depth of shape (N,).
+        """
         try:
             # Decompose the Essential Matrix into possible rotations and translation
             R1, R2, t = cv2.decomposeEssentialMat(E)  # R1: (3, 3), R2: (3, 3), t: (3, 1)
@@ -307,11 +422,33 @@ class VisualOdometry():
 
     #! Main Update Function ------------------------------------------------
     def update(self, img):
+        """
+        Updates the visual odometry with a new image.
+
+        Parameters:
+        img (numpy.ndarray): The new image frame to process.
+
+        This method extracts feature matches between the current image and the previous image,
+        and updates the pose of the camera based on these matches.
+
+        The method first calls `get_matches` to obtain matching feature points between the 
+        current image and the previous image. If matches are found (`q1` and `q2` are not None),
+        it then calls `update_pose` to update the camera's pose using these matches.
+
+        Returns:
+        None
+        """
         q1, q2 = self.get_matches(img)  # q1: (M, 2), q2: (M, 2)
         if q1 is not None and q2 is not None:
             self.update_pose(q1, q2)
 
     def shutdown(self):
+        """
+        Shuts down the Visual Odometry system by joining all bundle adjustment threads.
+
+        This method iterates over all threads in the `bundle_adjustment_threads` dictionary
+        and waits for each thread to complete its execution using the `join` method.
+        """
         for thread in self.bundle_adjustment_threads.values():
             thread.join()
 
