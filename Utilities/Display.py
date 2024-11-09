@@ -2,9 +2,17 @@ import cv2
 import numpy as np
 
 # Function to draw trajectory on an image
-def draw_trajectory(trajectory, rotation, all_points, all_pixels, frame, img_size=(800, 800), draw_scale=1):
+def draw_trajectory(trajectory, rotation, all_points, all_pixels, frame, actual_poses=None, img_size=(800, 800), draw_scale=1):
     # Create a blank image for the trajectory
     traj_img = np.zeros((img_size[1], img_size[0], 3), dtype=np.uint8)
+
+    # Draw the actual trajectory path if provided
+    if actual_poses:
+        actual_array = np.array(actual_poses)
+        actual_coords = (actual_array * draw_scale + np.array(img_size) // 2).astype(int)
+        # Draw the actual path in green
+        for coord in actual_coords:
+            cv2.circle(traj_img, tuple(coord), 2, (0, 200, 0), -1)
 
     # Draw the 3D points from the last frame
     if all_points:
