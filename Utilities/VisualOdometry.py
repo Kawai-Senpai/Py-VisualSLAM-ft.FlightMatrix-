@@ -4,6 +4,54 @@ import torch
 import threading 
 
 class VisualOdometry():
+    
+    """
+    A class to perform Visual Odometry using ORB features and FLANN-based matching.
+    Attributes:
+        bundle_adjustment_learning_rate (float): Learning rate for bundle adjustment.
+        device (torch.device): Device to run computations on (CPU or GPU).
+        bundle_adjustment_steps (list): Steps for bundle adjustment.
+        bundle_adjustment_epochs (int): Number of epochs for bundle adjustment.
+        bundle_adjustment_loss_tolerance (float): Loss tolerance for early stopping in bundle adjustment.
+        bundle_adjustment_threads (dict): Dictionary to store bundle adjustment threads.
+        lock (threading.Lock): Lock for thread synchronization.
+        estimated_poses (list): List of estimated poses.
+        points_3d (list): List of 3D points.
+        observations (list): List of 2D observations.
+        K (numpy.ndarray): Camera intrinsic matrix.
+        P (numpy.ndarray): Projection matrix.
+        orb (cv2.ORB): ORB feature detector and descriptor.
+        flann (cv2.FlannBasedMatcher): FLANN-based matcher.
+        ratio_test_threshold (float): Threshold for ratio test in FLANN matching.
+        knn_match_num (int): Number of nearest neighbors to find in FLANN matching.
+        prev_img (numpy.ndarray): Previous image frame.
+        prev_keypoints (list): List of keypoints in the previous frame.
+        prev_descriptors (numpy.ndarray): Descriptors of keypoints in the previous frame.
+        display_frame (numpy.ndarray): Frame for displaying keypoints.
+        image_sharpen_kernel (numpy.ndarray): Kernel for image sharpening.
+        sharpening (bool): Flag to enable/disable image sharpening.
+        findEssentialMat_method (int): Method for finding the Essential Matrix.
+        findEssentialMat_prob (float): Probability for RANSAC in finding the Essential Matrix.
+        findEssentialMat_threshold (float): Threshold for RANSAC in finding the Essential Matrix.
+    Methods:
+        _load_calib(filepath):
+            Loads camera calibration parameters from a file.
+        _form_transf(R, t):
+            Forms a transformation matrix from rotation and translation.
+        get_matches(img):
+            Detects ORB keypoints and computes descriptors, then finds matches between the previous and current frames.
+        update_pose(q1, q2):
+            Updates the camera pose using matched keypoints.
+        decomp_essential_mat(E, q1, q2):
+            Decomposes the Essential Matrix to obtain rotation and translation.
+        update(img):
+            Main update function to process a new image frame.
+        shutdown():
+            Joins all bundle adjustment threads.
+        project(points_3d, pose, K):
+        optimisable_func(estimated_poses, points_3d, K, observations):
+        bundle_adjustment(steps, iterations):
+    """
 
     def __init__(self, init_pose = None, 
                 camera_calib_file = 'calib.txt',

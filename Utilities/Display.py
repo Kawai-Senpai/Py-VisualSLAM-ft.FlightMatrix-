@@ -3,6 +3,21 @@ import numpy as np
 
 # Function to draw trajectory on an image
 def draw_trajectory(trajectory, rotation, all_points, all_pixels, frame, actual_poses=None, img_size=(800, 800), draw_scale=1):
+    
+    """
+    Draws a visual representation of a trajectory on a blank image.
+    Parameters:
+    trajectory (list of list of float): The trajectory path to be drawn.
+    rotation (numpy.ndarray): The rotation matrix representing the current orientation.
+    all_points (list of numpy.ndarray): List of 3D points from each frame.
+    all_pixels (list of numpy.ndarray): List of corresponding pixel coordinates for the 3D points.
+    frame (numpy.ndarray): The current frame from which colors are sampled.
+    actual_poses (list of list of float, optional): The actual trajectory path to be drawn in green. Defaults to None.
+    img_size (tuple of int, optional): The size of the output image. Defaults to (800, 800).
+    draw_scale (float, optional): The scale factor for drawing. Defaults to 1.
+    Returns:
+    numpy.ndarray: The image with the drawn trajectory.
+    """
     # Create a blank image for the trajectory
     traj_img = np.zeros((img_size[1], img_size[0], 3), dtype=np.uint8)
 
