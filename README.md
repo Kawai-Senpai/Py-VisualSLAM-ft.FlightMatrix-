@@ -105,10 +105,6 @@ For testing with the **KITTI dataset**, run:
 python KITTI_Dataset_Odometry.py
 ```
 
-#### 4. Logging:
-
-Pose estimations and error analysis are saved in the `FlightMatrixLog.log` file for further inspection.
-
 ---
 
 ### 📚 Documentation: VisualOdometry Class
