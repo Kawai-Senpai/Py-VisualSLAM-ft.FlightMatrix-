@@ -59,13 +59,13 @@ class VisualOdometry():
                 table_number = 6,
                 key_size = 12,
                 multi_probe_level = 1,
-                ratio_test_threshold = 0.75,  
+                ratio_test_threshold = 0.5,  
                 knn_match_num = 2,            
                 max_features = 3000,         
-                bundle_adjustment_steps = [2, 10],
-                bundle_adjustment_epochs = 500,
+                bundle_adjustment_steps = [2, 5, 10, 15, 20, 25],
+                bundle_adjustment_epochs = 1000,
                 bundle_adjustment_learning_rate = 1e-3,
-                bundle_adjustment_loss_tolerance = 1,
+                bundle_adjustment_loss_tolerance = 0.001,
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
                 image_sharpen_kernel = np.array([ 
                 [0, -1, 0], 
@@ -133,7 +133,7 @@ class VisualOdometry():
         self.bundle_adjustment_epochs = bundle_adjustment_epochs
         self.bundle_adjustment_loss_tolerance = bundle_adjustment_loss_tolerance
 
-        self.bundle_adjustment_threads = {}
+        self.bundle_adjustment_threads = []
         self.lock = threading.Lock()
         
         if init_pose is not None and init_pose.shape == (4, 4):
@@ -326,24 +326,38 @@ class VisualOdometry():
         # Display the estimated pose
         print(f"Estimated Pose --> x: {self.estimated_poses[-1][0, 3]}, y: {self.estimated_poses[-1][1, 3]}, z: {self.estimated_poses[-1][2, 3]}")
 
-        # Convert the homogeneous 3D points to world coordinates
-        hom_Q_world = self.estimated_poses[-1] @ hom_Q  # Shape: (4, N)
-        Q = hom_Q_world[:3, :] / hom_Q_world[3, :]  # Shape: (3, N)
-
-        # Filter out points with negative depth
-        Q = Q[:, valid_mask]  # Shape: (3, M)
+        # Apply the valid mask to hom_Q before transforming
+        hom_Q = hom_Q[:, valid_mask]  # Shape: (4, M)
         q2_inliers = q2_inliers[valid_mask]  # Shape: (M, 2)
 
-        # Append the 3D points and observations for bundle adjustment
-        self.points_3d.append(Q.T)  # Shape: (M, 3)
-        self.observations.append(q2_inliers)  # Shape: (M, 2)
-
+        # Convert the homogeneous 3D points to world coordinates without inversion
+        hom_Q_world = self.estimated_poses[-1] @ hom_Q  # Shape: (4, M)
+        Q = hom_Q_world[:3, :] / hom_Q_world[3, :]  # Shape: (3, M)
+        
+        # **Reprojection Error Filtering Starts Here**
+        # Project the 3D points back onto the image plane
+        points_3d_world = Q.T  # Shape: (M, 3)
+        
+        # Compute projection using intrinsic matrix
+        projected_points_hom = (self.K @ points_3d_world.T).T  # Shape: (M, 3)
+        projected_points = (projected_points_hom[:, :2] / projected_points_hom[:, 2, np.newaxis])  # Shape: (M, 2)
+        
+        # Call the new filter_points method
+        final_points_3d, final_observations = self.filter_points(projected_points, q2_inliers, points_3d_world)
+        
+        # Append the filtered 3D points and observations for bundle adjustment
+        if final_points_3d.size > 0:
+            self.points_3d.append(final_points_3d)  # Shape: (M_filtered, 3)
+            self.observations.append(final_observations)  # Shape: (M_filtered, 2)
+        else:
+            print("No 3D points passed the filtering criteria.")
+            return
+        
         # Start the bundle adjustment threads if not already running
         for step in self.bundle_adjustment_steps:
-            if step not in self.bundle_adjustment_threads or not self.bundle_adjustment_threads[step].is_alive():
-                thread = threading.Thread(target=self.bundle_adjustment, args=(step, self.bundle_adjustment_epochs))
-                thread.start()
-                self.bundle_adjustment_threads[step] = thread
+            thread = threading.Thread(target=self.bundle_adjustment, args=(step, self.bundle_adjustment_epochs))
+            thread.start()
+            self.bundle_adjustment_threads.append(thread)
 
     def decomp_essential_mat(self, E, q1, q2):
         """
@@ -449,7 +463,7 @@ class VisualOdometry():
         This method iterates over all threads in the `bundle_adjustment_threads` dictionary
         and waits for each thread to complete its execution using the `join` method.
         """
-        for thread in self.bundle_adjustment_threads.values():
+        for thread in self.bundle_adjustment_threads:
             thread.join()
 
     #! Bundle Adjustment ----------------------------------------------------
@@ -560,3 +574,40 @@ class VisualOdometry():
                 for i, idx in enumerate(range(start_idx, total_frames)):
                     self.estimated_poses[idx] = poses[i].detach().cpu().numpy()  # Shape: (4, 4)
                     self.points_3d[idx] = points[i].detach().cpu().numpy()  # Shape: (M, 3)
+
+    def filter_points(self, projected_points, observed_points, points_3d_world):
+        """
+        Filters 3D points based on reprojection error and depth thresholds.
+        
+        Parameters:
+            projected_points (numpy.ndarray): Projected 2D points on the image plane. Shape: (M, 2)
+            observed_points (numpy.ndarray): Observed 2D keypoints in the image. Shape: (M, 2)
+            points_3d_world (numpy.ndarray): 3D points in world coordinates. Shape: (M, 3)
+        
+        Returns:
+            tuple: Filtered 3D points and observations.
+        """
+        # Compute Euclidean distance between observed and projected points
+        reprojection_errors = np.linalg.norm(observed_points - projected_points, axis=1)  # Shape: (M,)
+        
+        # Define a higher reprojection error threshold
+        reproj_error_threshold = 150.0  # pixels
+        
+        # Create a mask for points with reprojection error below the threshold
+        error_mask = reprojection_errors < reproj_error_threshold
+        
+        # Apply the mask to filter 3D points and observations
+        filtered_points_3d = points_3d_world[error_mask]
+        filtered_observations = observed_points[error_mask]
+        
+        # Define depth thresholds
+        depth_threshold_min = 0.5  # meters
+        depth_threshold_max = 50.0  # meters
+        depths = filtered_points_3d[:, 2]
+        depth_mask = (depths > depth_threshold_min) & (depths < depth_threshold_max)
+        
+        # Apply depth mask
+        final_points_3d = filtered_points_3d[depth_mask]
+        final_observations = filtered_observations[depth_mask]
+        
+        return final_points_3d, final_observations
